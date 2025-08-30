@@ -9,8 +9,7 @@ const config = require('./config');
 // Initialize Discord client
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.Guilds
   ]
 });
 
