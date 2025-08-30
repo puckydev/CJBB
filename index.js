@@ -79,6 +79,10 @@ class BlockfrostAPI {
   async getTransactionUtxos(txHash) {
     return this.makeRequest(`/txs/${txHash}/utxos`);
   }
+
+  async getTransactionMetadata(txHash) {
+    return this.makeRequest(`/txs/${txHash}/metadata`);
+  }
 }
 
 // Initialize Blockfrost API
@@ -92,6 +96,61 @@ function formatADA(lovelaces) {
 // Format large numbers with commas
 function formatNumber(num) {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// Check if transaction is a DEX transaction based on metadata
+function isDexTransaction(metadata) {
+  if (!metadata || metadata.length === 0) {
+    return { isDex: false, dexName: '' };
+  }
+
+  for (const meta of metadata) {
+    // Check for standard DEX metadata (label 674)
+    if (meta.label === '674') {
+      const message = meta.json_metadata;
+      const messageStr = JSON.stringify(message).toLowerCase();
+      
+      if (messageStr.includes('splash')) {
+        return { isDex: true, dexName: 'Splash' };
+      }
+      
+      // Check for other DEX patterns
+      const dexPatterns = [
+        { name: 'Minswap', patterns: ['minswap', 'order executed'] },
+        { name: 'SundaeSwap', patterns: ['sundae', 'swap'] },
+        { name: 'MuesliSwap', patterns: ['muesli', 'order'] },
+        { name: 'WingRiders', patterns: ['wing', 'riders'] }
+      ];
+      
+      for (const dex of dexPatterns) {
+        if (dex.patterns.some(pattern => messageStr.includes(pattern))) {
+          return { isDex: true, dexName: dex.name };
+        }
+      }
+    }
+    
+    // Check for Splash DEX specific metadata (label 0 with 0x0100)
+    else if (meta.label === '0' || meta.label === 0) {
+      const message = meta.json_metadata;
+      
+      // Splash DEX uses label 0 with specific hex values
+      if (message === '0x0100' || message === '0x0001' || (typeof message === 'string' && message.startsWith('0x01'))) {
+        return { isDex: true, dexName: 'Splash' };
+      }
+    }
+    
+    // Check for other metadata that might indicate DEX activity
+    else if (meta.label) {
+      const message = meta.json_metadata;
+      const messageStr = JSON.stringify(message).toLowerCase();
+      
+      if (messageStr.includes('splash') || messageStr.includes('dex') || messageStr.includes('swap')) {
+        return { isDex: true, dexName: messageStr.includes('splash') ? 'Splash' : 'Unknown DEX' };
+      }
+    }
+  }
+  
+  return { isDex: false, dexName: '' };
 }
 
 // Get token amount from transaction - only count tokens going to buyers (not change/existing holdings)
@@ -126,14 +185,15 @@ function getTokenAmount(utxos, policyId) {
 }
 
 // Create buy notification embed
-async function createBuyNotification(transaction, tokenAmount, adaAmount) {
+async function createBuyNotification(transaction, tokenAmount, adaAmount, dexName = 'DEX') {
   const embed = new EmbedBuilder()
     .setColor('#00ff00')
     .setTitle('🚀 $CRAWJU BUY DETECTED!')
-    .setDescription(`A new purchase of $CRAWJU has been detected on the Cardano blockchain!`)
+    .setDescription(`A new purchase of $CRAWJU has been detected on ${dexName} DEX!`)
     .addFields(
       { name: '💰 Amount', value: `${formatNumber(tokenAmount)} $CRAWJU`, inline: true },
       { name: '💎 Value', value: `${formatADA(adaAmount)} ADA`, inline: true },
+      { name: '🏛️ DEX', value: dexName, inline: true },
       { name: '📊 Transaction', value: `[View on Cardanoscan](https://cardanoscan.io/transaction/${transaction.hash})`, inline: false }
     )
     .setTimestamp(new Date(transaction.block_time * 1000))
@@ -171,17 +231,26 @@ async function monitorCRAWJUTransactions() {
       }
 
       try {
-        // Get transaction details and UTXOs
-        const [txDetails, txUtxos] = await Promise.all([
+        // Get transaction details, UTXOs, and metadata
+        const [txDetails, txUtxos, txMetadata] = await Promise.all([
           blockfrost.getTransactionDetails(tx.tx_hash),
-          blockfrost.getTransactionUtxos(tx.tx_hash)
+          blockfrost.getTransactionUtxos(tx.tx_hash),
+          blockfrost.getTransactionMetadata(tx.tx_hash).catch(() => [])
         ]);
 
+        // First check if this is a DEX transaction
+        const dexCheck = isDexTransaction(txMetadata);
+        
+        if (!dexCheck.isDex) {
+          console.log(`Skipping transaction ${tx.tx_hash} - not a DEX transaction`);
+          continue;
+        }
+        
         // Check if this is a buy transaction (has CRAWJU in outputs)
         const tokenAmount = getTokenAmount(txUtxos, config.cardano.policyId);
         
         if (tokenAmount > 0) {
-          console.log(`Buy detected: ${tokenAmount} $CRAWJU in transaction ${tx.tx_hash}`);
+          console.log(`${dexCheck.dexName} DEX buy detected: ${tokenAmount} $CRAWJU in transaction ${tx.tx_hash}`);
           
           // Calculate ADA amount involved - find pure ADA inputs (buyer's payment)
           let buyerInputs = [];
@@ -235,7 +304,7 @@ async function monitorCRAWJUTransactions() {
           }
           
           // Create and send notification
-          const notification = await createBuyNotification(txDetails, tokenAmount, adaAmount);
+          const notification = await createBuyNotification(txDetails, tokenAmount, adaAmount, dexCheck.dexName);
           
           const channel = client.channels.cache.get(config.discord.channelId);
           if (channel) {
