@@ -9,7 +9,7 @@ module.exports = {
     policyId: 'ac597ca62a32cab3f4766c8f9cd577e50ebb1d00383ec7fa3990b016435241574a55',
     tokenName: '$CRAWJU',
     blockfrostApiUrl: process.env.BLOCKFROST_API_URL || 'https://cardano-mainnet.blockfrost.io/api/v0',
-    blockfrostApiKey: process.env.BLOCKFROST_API_KEY || 'REPLACE_WITH_YOUR_BLOCKFROST_KEY'
+    blockfrostApiKey: process.env.BLOCKFROST_API_KEY || 'mainnet2aTJWX1vVxEtCKSVn2MID4hW1TIAMNKp'
   },
   monitoring: {
     checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 5,
