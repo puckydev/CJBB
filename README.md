@@ -35,9 +35,9 @@ npm install
 3. Set up environment variables:
 Create a `.env` file with the following variables:
 ```env
-DISCORD_TOKEN=your_discord_bot_token
-DISCORD_CHANNEL_ID=your_discord_channel_id
-BLOCKFROST_API_KEY=your_blockfrost_api_key
+DISCORD_TOKEN=REPLACE_WITH_YOUR_DISCORD_TOKEN
+DISCORD_CHANNEL_ID=YOUR_DISCORD_CHANNEL_ID
+BLOCKFROST_API_KEY=REPLACE_WITH_YOUR_BLOCKFROST_KEY
 CHECK_INTERVAL_MINUTES=5
 ```
 
