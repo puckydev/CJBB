@@ -200,22 +200,21 @@ function getTokenAmount(utxos, policyId) {
 async function createBuyNotification(transaction, tokenAmount, adaAmount, dexName = 'DEX') {
   const embed = new EmbedBuilder()
     .setColor('#00ff00')
-    .setTitle('🚀 $CRAWJU BUY DETECTED!')
-    .setDescription(`A new purchase of $CRAWJU has been detected on ${dexName} DEX!`)
+    .setTitle('🦞 $CRAWJU BUY DETECTED!')
+    .setDescription(`A new purchase of $CRAWJU has been detected on ${dexName}!`)
     .addFields(
       { name: '💰 Amount', value: `${formatNumber(tokenAmount)} $CRAWJU`, inline: true },
       { name: '💎 Value', value: `${formatADA(adaAmount)} ADA`, inline: true },
-      { name: '🏛️ DEX', value: dexName, inline: true },
       { name: '📊 Transaction', value: `[View on Cardanoscan](https://cardanoscan.io/transaction/${transaction.hash})`, inline: false }
     )
     .setTimestamp(new Date(transaction.block_time * 1000))
-    .setFooter({ text: 'CRAWJU Buy Bot | Powered by Cardano' });
+    .setFooter({ text: 'Powered by King Craju' });
 
   // Add king image if it exists
   const kingImagePath = path.join(__dirname, 'king.JPG');
   if (fs.existsSync(kingImagePath)) {
     const attachment = new AttachmentBuilder(kingImagePath, { name: 'king.jpg' });
-    embed.setThumbnail('attachment://king.jpg');
+    embed.setImage('attachment://king.jpg');
     return { embeds: [embed], files: [attachment] };
   }
 
@@ -286,10 +285,15 @@ async function monitorCRAWJUTransactions() {
             }
           }
           
-          // Use the largest pure ADA input as the purchase amount (main purchase)
+          // Calculate the net purchase amount (subtract transaction fee)
           let adaAmount = '0';
           if (buyerInputs.length > 0) {
-            adaAmount = Math.max(...buyerInputs).toString();
+            // Get the largest pure ADA input (buyer's main payment)
+            const grossAmount = Math.max(...buyerInputs);
+            // Subtract the transaction fee to get the net purchase amount
+            const transactionFee = parseInt(txDetails.fees);
+            const netAmount = grossAmount - transactionFee;
+            adaAmount = netAmount.toString();
           } else {
             // Fallback: Calculate difference between inputs and outputs
             let totalInputADA = 0;
