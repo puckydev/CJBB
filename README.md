@@ -78,16 +78,27 @@ The bot is configured through the `config.js` file and environment variables:
    - Application ID: `1411196158663196713`
    - Public Key: `2963bb3d4d4132e5c2f05a900ff75e3cff7332025f2f4b7c06305901b5efcbbf`
 
-2. **Bot Permissions**: The bot needs the following permissions:
-   - Send Messages
-   - Embed Links
-   - Attach Files
-   - Read Message History
+2. **Bot Permissions**: The bot needs the following permissions in your Discord server:
+   - **View Channels** - To access the target channel
+   - **Send Messages** - To post buy notifications
+   - **Embed Links** - To send rich embeds with transaction details
+   - **Attach Files** - To include the king.JPG image in notifications
+   - **Read Message History** - General bot functionality
 
-3. **Invite Bot**: Use this URL to invite the bot to your server:
+3. **Required Discord Intents**: The bot is configured with these intents:
+   - `Guilds` - Access to guild information
+   - `GuildMessages` - Ability to send messages
+   - `MessageContent` - Access to message content (if needed)
+
+4. **Invite Bot**: Use this URL to invite the bot to your server:
    ```
    https://discord.com/oauth2/authorize?client_id=1411196158663196713&permissions=84992&integration_type=0&scope=bot
    ```
+
+5. **Channel Setup**: After inviting the bot:
+   - Ensure the bot has access to your target channel
+   - Verify the `DISCORD_CHANNEL_ID` in your environment variables matches your channel
+   - Test by sending a message to confirm the bot can post in the channel
 
 ## How It Works
 
@@ -126,6 +137,43 @@ The bot logs all activities to console, including:
 - Buy detections
 - Error messages
 - API responses
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"Missing Access" Error (Error Code 50001)**:
+   - Verify the bot has been invited to your Discord server
+   - Check that the bot has "Send Messages" permission in the target channel
+   - Ensure the bot has "Embed Links" and "Attach Files" permissions
+   - Confirm the `DISCORD_CHANNEL_ID` is correct
+
+2. **"Channel not found" Error**:
+   - Double-check your `DISCORD_CHANNEL_ID` environment variable
+   - Ensure the bot has "View Channels" permission
+   - Verify the bot is in the same server as the target channel
+
+3. **Deprecation Warnings**:
+   - Updated to use `clientReady` event instead of deprecated `ready` event
+   - All Discord.js v14 compatibility issues have been resolved
+
+4. **Bot appears offline**:
+   - Check your `DISCORD_TOKEN` environment variable
+   - Verify the token is valid and hasn't been regenerated
+   - Check the console logs for connection errors
+
+5. **No buy notifications appearing**:
+   - Verify your `BLOCKFROST_API_KEY` is valid
+   - Check if there are recent $CRAWJU transactions on the blockchain
+   - Review console logs for API errors
+
+### Logs to Check
+
+The bot provides detailed logging. Look for these messages:
+- `✅ [BotName] is online and monitoring $CRAWJU!` - Bot connected successfully
+- `📊 Monitoring policy ID: [policy_id]` - Confirms correct token monitoring
+- `💬 Sending notifications to channel: [channel_id]` - Shows target channel
+- `Buy notification sent to Discord` - Successful notification
 
 ## Support
 

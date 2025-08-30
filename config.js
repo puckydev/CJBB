@@ -2,7 +2,7 @@
 module.exports = {
   discord: {
     token: process.env.DISCORD_TOKEN || 'REPLACE_WITH_YOUR_DISCORD_TOKEN',
-    channelId: process.env.DISCORD_CHANNEL_ID || '1411157229566165155',
+    channelId: process.env.DISCORD_CHANNEL_ID || '1411385603961913344',
     clientId: '1411196158663196713'
   },
   cardano: {

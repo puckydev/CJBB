@@ -9,7 +9,9 @@ const config = require('./config');
 // Initialize Discord client
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -308,10 +310,22 @@ async function monitorCRAWJUTransactions() {
           
           const channel = client.channels.cache.get(config.discord.channelId);
           if (channel) {
-            await channel.send(notification);
-            console.log('Buy notification sent to Discord');
+            try {
+              await channel.send(notification);
+              console.log('Buy notification sent to Discord');
+            } catch (error) {
+              console.error('Failed to send buy notification:', error.message);
+              if (error.code === 50001) {
+                console.error('Missing Access - Please ensure the bot has proper permissions:');
+                console.log('- Send Messages permission in the target channel');
+                console.log('- Embed Links permission');
+                console.log('- Attach Files permission (for images)');
+                console.log('- View Channel permission');
+              }
+            }
           } else {
-            console.error('Discord channel not found');
+            console.error(`Discord channel with ID ${config.discord.channelId} not found`);
+            console.log('Please verify the channel ID and bot permissions');
           }
         }
       } catch (error) {
@@ -330,7 +344,7 @@ async function monitorCRAWJUTransactions() {
 }
 
 // Bot event handlers
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`✅ ${client.user.tag} is online and monitoring $CRAWJU!`);
   console.log(`📊 Monitoring policy ID: ${config.cardano.policyId}`);
   console.log(`💬 Sending notifications to channel: ${config.discord.channelId}`);
@@ -344,7 +358,18 @@ client.once('ready', () => {
       .setDescription('Bot is now monitoring the Cardano blockchain for $CRAWJU purchases.')
       .setTimestamp();
     
-    channel.send({ embeds: [embed] });
+    channel.send({ embeds: [embed] }).catch(error => {
+      console.error('Failed to send startup message:', error.message);
+      console.log('This might be due to missing permissions. Please ensure the bot has:');
+      console.log('- Send Messages permission in the target channel');
+      console.log('- Embed Links permission');
+      console.log('- Attach Files permission (for images)');
+    });
+  } else {
+    console.error(`Channel with ID ${config.discord.channelId} not found. Please verify:`);
+    console.log('- The channel ID is correct');
+    console.log('- The bot has access to the guild/server');
+    console.log('- The bot has View Channel permission');
   }
 });
 
