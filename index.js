@@ -94,21 +94,35 @@ function formatNumber(num) {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-// Get token amount from transaction outputs
+// Get token amount from transaction - only count tokens going to buyers (not change/existing holdings)
 function getTokenAmount(utxos, policyId) {
-  let totalAmount = 0;
+  // Find outputs that have both ADA and CRAWJU tokens (these are likely buy transactions)
+  // We want the smallest CRAWJU amount as that's likely the purchase, not the change
+  let tokenAmounts = [];
   
   for (const output of utxos.outputs) {
     if (output.amount) {
+      let hasADA = false;
+      let crawjuAmount = 0;
+      
       for (const asset of output.amount) {
-        if (asset.unit && asset.unit.includes(policyId)) {
-          totalAmount += parseInt(asset.quantity);
+        if (asset.unit === 'lovelace') {
+          hasADA = true;
         }
+        if (asset.unit && asset.unit.includes(policyId)) {
+          crawjuAmount = parseInt(asset.quantity);
+        }
+      }
+      
+      // If this output has both ADA and CRAWJU, it's likely a buy transaction
+      if (hasADA && crawjuAmount > 0) {
+        tokenAmounts.push(crawjuAmount);
       }
     }
   }
   
-  return totalAmount;
+  // Return the smallest amount (the actual purchase, not the change)
+  return tokenAmounts.length > 0 ? Math.min(...tokenAmounts) : 0;
 }
 
 // Create buy notification embed
@@ -169,8 +183,56 @@ async function monitorCRAWJUTransactions() {
         if (tokenAmount > 0) {
           console.log(`Buy detected: ${tokenAmount} $CRAWJU in transaction ${tx.tx_hash}`);
           
-          // Calculate ADA amount involved
-          const adaAmount = txDetails.output_amount.find(asset => asset.unit === 'lovelace')?.quantity || '0';
+          // Calculate ADA amount involved - find pure ADA inputs (buyer's payment)
+          let buyerInputs = [];
+          
+          for (const input of txUtxos.inputs) {
+            let hasTokens = false;
+            let adaAmount = 0;
+            
+            for (const asset of input.amount) {
+              if (asset.unit === 'lovelace') {
+                adaAmount = parseInt(asset.quantity);
+              }
+              if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
+                hasTokens = true;
+              }
+            }
+            
+            // If this input only has ADA (no CRAWJU tokens), it's likely from the buyer
+            if (!hasTokens && adaAmount > 0) {
+              buyerInputs.push(adaAmount);
+            }
+          }
+          
+          // Use the largest pure ADA input as the purchase amount (main purchase)
+          let adaAmount = '0';
+          if (buyerInputs.length > 0) {
+            adaAmount = Math.max(...buyerInputs).toString();
+          } else {
+            // Fallback: Calculate difference between inputs and outputs
+            let totalInputADA = 0;
+            let totalOutputADA = 0;
+            
+            for (const input of txUtxos.inputs) {
+              for (const asset of input.amount) {
+                if (asset.unit === 'lovelace') {
+                  totalInputADA += parseInt(asset.quantity);
+                }
+              }
+            }
+            
+            for (const output of txUtxos.outputs) {
+              for (const asset of output.amount) {
+                if (asset.unit === 'lovelace') {
+                  totalOutputADA += parseInt(asset.quantity);
+                }
+              }
+            }
+            
+            const netSpent = totalInputADA - totalOutputADA;
+            adaAmount = netSpent.toString();
+          }
           
           // Create and send notification
           const notification = await createBuyNotification(txDetails, tokenAmount, adaAmount);
