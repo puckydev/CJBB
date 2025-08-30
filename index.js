@@ -3,6 +3,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const config = require('./config');
 
 // Initialize Discord client
@@ -15,6 +16,27 @@ const client = new Client({
 
 // Store last processed transaction hash to avoid duplicates
 let lastProcessedTxHash = null;
+
+// HTTP server for health checks (Railway requirement)
+const server = http.createServer((req, res) => {
+  if (req.url === '/' || req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'healthy',
+      bot: client.isReady() ? 'connected' : 'connecting',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    }));
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+  }
+});
+
+const port = process.env.PORT || 3000;
+server.listen(port, () => {
+  console.log(`🌐 Health check server listening on port ${port}`);
+});
 
 // Blockfrost API helper
 class BlockfrostAPI {
@@ -215,14 +237,18 @@ cron.schedule(cronExpression, () => {
 // Handle graceful shutdown
 process.on('SIGINT', () => {
   console.log('Shutting down bot...');
-  client.destroy();
-  process.exit(0);
+  server.close(() => {
+    client.destroy();
+    process.exit(0);
+  });
 });
 
 process.on('SIGTERM', () => {
   console.log('Shutting down bot...');
-  client.destroy();
-  process.exit(0);
+  server.close(() => {
+    client.destroy();
+    process.exit(0);
+  });
 });
 
 // Login to Discord
