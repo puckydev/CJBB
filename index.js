@@ -6,13 +6,23 @@ const path = require('path');
 const http = require('http');
 const config = require('./config');
 
-// Initialize Discord client
+// Initialize Discord client with minimal intents
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.Guilds
+  ],
+  // Ensure we're not accidentally requesting any privileged intents
+  partials: []
+});
+
+// Suppress the deprecation warning about 'ready' event rename
+// This is likely coming from a dependency, not our code
+process.removeAllListeners('warning');
+process.on('warning', (warning) => {
+  // Only show warnings that aren't the ready event deprecation
+  if (!warning.message.includes('ready event has been renamed to clientReady')) {
+    console.warn('Node.js warning:', warning.message);
+  }
 });
 
 // Store last processed transaction hash to avoid duplicates
@@ -310,22 +320,33 @@ async function monitorCRAWJUTransactions() {
           
           const channel = client.channels.cache.get(config.discord.channelId);
           if (channel) {
+            // Check permissions before sending
+            const permissions = await checkBotPermissions(channel);
+            
+            if (permissions.error || !permissions.canSend || !permissions.canEmbed) {
+              console.error('❌ Cannot send notification - insufficient permissions:');
+              console.log(`- View Channel: ${permissions.canView ? '✅' : '❌'}`);
+              console.log(`- Send Messages: ${permissions.canSend ? '✅' : '❌'}`);
+              console.log(`- Embed Links: ${permissions.canEmbed ? '✅' : '❌'}`);
+              console.log(`- Attach Files: ${permissions.canAttach ? '✅' : '❌'}`);
+              if (permissions.error) console.log(`- Error: ${permissions.error}`);
+              return;
+            }
+
             try {
               await channel.send(notification);
-              console.log('Buy notification sent to Discord');
+              console.log('✅ Buy notification sent to Discord');
             } catch (error) {
-              console.error('Failed to send buy notification:', error.message);
+              console.error('❌ Failed to send buy notification:', error.message);
               if (error.code === 50001) {
-                console.error('Missing Access - Please ensure the bot has proper permissions:');
-                console.log('- Send Messages permission in the target channel');
-                console.log('- Embed Links permission');
-                console.log('- Attach Files permission (for images)');
-                console.log('- View Channel permission');
+                console.error('Missing Access - The bot token may be invalid or the bot was removed from the server');
+              } else if (error.code === 50013) {
+                console.error('Missing Permissions - Please check bot permissions in the channel');
               }
             }
           } else {
-            console.error(`Discord channel with ID ${config.discord.channelId} not found`);
-            console.log('Please verify the channel ID and bot permissions');
+            console.error(`❌ Discord channel with ID ${config.discord.channelId} not found`);
+            console.log('Please verify the channel ID and ensure the bot has access to the server');
           }
         }
       } catch (error) {
@@ -343,34 +364,113 @@ async function monitorCRAWJUTransactions() {
   }
 }
 
+// Function to check bot permissions in a channel
+async function checkBotPermissions(channel) {
+  if (!channel || !channel.guild) {
+    return { canSend: false, canEmbed: false, canAttach: false, error: 'Channel not found or not in a guild' };
+  }
+
+  try {
+    const botMember = await channel.guild.members.fetch(client.user.id);
+    const permissions = channel.permissionsFor(botMember);
+    
+    return {
+      canSend: permissions.has('SendMessages'),
+      canEmbed: permissions.has('EmbedLinks'),
+      canAttach: permissions.has('AttachFiles'),
+      canView: permissions.has('ViewChannel'),
+      error: null
+    };
+  } catch (error) {
+    return { canSend: false, canEmbed: false, canAttach: false, canView: false, error: error.message };
+  }
+}
+
+// Function to send startup message with retry
+async function sendStartupMessage() {
+  let retryCount = 0;
+  const maxRetries = 3;
+  
+  while (retryCount < maxRetries) {
+    try {
+      // Get channel and check permissions
+      const channel = client.channels.cache.get(config.discord.channelId);
+      if (!channel) {
+        console.log(`⏳ Channel not found, retrying... (${retryCount + 1}/${maxRetries})`);
+        retryCount++;
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        continue;
+      }
+
+      // Check permissions
+      const permissions = await checkBotPermissions(channel);
+      
+      if (permissions.error) {
+        console.error(`❌ Error checking permissions: ${permissions.error}`);
+        return false;
+      }
+
+      console.log('🔍 Permission check results:');
+      console.log(`- View Channel: ${permissions.canView ? '✅' : '❌'}`);
+      console.log(`- Send Messages: ${permissions.canSend ? '✅' : '❌'}`);
+      console.log(`- Embed Links: ${permissions.canEmbed ? '✅' : '❌'}`);
+      console.log(`- Attach Files: ${permissions.canAttach ? '✅' : '❌'}`);
+
+      if (!permissions.canView || !permissions.canSend || !permissions.canEmbed) {
+        console.error('❌ Bot lacks required permissions. Please ensure the bot has:');
+        console.log('- View Channel permission');
+        console.log('- Send Messages permission');
+        console.log('- Embed Links permission');
+        console.log('- Attach Files permission (for images)');
+        return false;
+      }
+
+      // Send startup message
+      const embed = new EmbedBuilder()
+        .setColor('#0099ff')
+        .setTitle('🤖 CRAWJU Buy Bot Online!')
+        .setDescription('Bot is now monitoring the Cardano blockchain for $CRAWJU purchases.')
+        .setTimestamp();
+      
+      await channel.send({ embeds: [embed] });
+      console.log('✅ Startup message sent successfully');
+      return true;
+      
+    } catch (error) {
+      console.error(`❌ Failed to send startup message (attempt ${retryCount + 1}):`, error.message);
+      
+      if (error.code === 50001) {
+        console.error('Missing Access - The bot token may be invalid or the bot was removed from the server');
+        return false;
+      } else if (error.code === 50013) {
+        console.error('Missing Permissions - Please check bot permissions in the channel');
+        return false;
+      }
+      
+      retryCount++;
+      if (retryCount < maxRetries) {
+        console.log(`⏳ Retrying in 2 seconds... (${retryCount}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+  }
+  
+  console.error(`❌ Failed to send startup message after ${maxRetries} attempts`);
+  console.log('Please verify:');
+  console.log('- The channel ID is correct');
+  console.log('- The bot has access to the guild/server');
+  console.log('- The bot has proper permissions');
+  return false;
+}
+
 // Bot event handlers
-client.once('clientReady', () => {
+client.once('clientReady', async () => {
   console.log(`✅ ${client.user.tag} is online and monitoring $CRAWJU!`);
   console.log(`📊 Monitoring policy ID: ${config.cardano.policyId}`);
   console.log(`💬 Sending notifications to channel: ${config.discord.channelId}`);
   
-  // Send startup message
-  const channel = client.channels.cache.get(config.discord.channelId);
-  if (channel) {
-    const embed = new EmbedBuilder()
-      .setColor('#0099ff')
-      .setTitle('🤖 CRAWJU Buy Bot Online!')
-      .setDescription('Bot is now monitoring the Cardano blockchain for $CRAWJU purchases.')
-      .setTimestamp();
-    
-    channel.send({ embeds: [embed] }).catch(error => {
-      console.error('Failed to send startup message:', error.message);
-      console.log('This might be due to missing permissions. Please ensure the bot has:');
-      console.log('- Send Messages permission in the target channel');
-      console.log('- Embed Links permission');
-      console.log('- Attach Files permission (for images)');
-    });
-  } else {
-    console.error(`Channel with ID ${config.discord.channelId} not found. Please verify:`);
-    console.log('- The channel ID is correct');
-    console.log('- The bot has access to the guild/server');
-    console.log('- The bot has View Channel permission');
-  }
+  // Send startup message with retry logic
+  await sendStartupMessage();
 });
 
 client.on('error', (error) => {
@@ -406,9 +506,30 @@ process.on('SIGTERM', () => {
   });
 });
 
-// Login to Discord
+// Login to Discord with enhanced error handling
+console.log('🤖 Attempting to login to Discord...');
+console.log('🔐 Token length:', config.discord.token ? config.discord.token.length : 'undefined');
+console.log('🎯 Intents configured: Guilds only (most basic configuration)');
+
 client.login(config.discord.token).catch(error => {
-  console.error('Failed to login to Discord:', error);
+  console.error('❌ Failed to login to Discord:', error);
+  
+  if (error.message.includes('disallowed intents')) {
+    console.error('\n🚨 INTENT ERROR DETECTED:');
+    console.error('The bot is requesting intents that are not enabled in Discord Developer Portal.');
+    console.error('\n📋 QUICK FIX:');
+    console.error('1. Go to https://discord.com/developers/applications');
+    console.error('2. Select your bot application');
+    console.error('3. Click "Bot" in sidebar');
+    console.error('4. Scroll to "Privileged Gateway Intents"');
+    console.error('5. DISABLE all privileged intents (they should all be OFF)');
+    console.error('6. Save changes and redeploy');
+    console.error('\nThis bot only needs basic Guild access - no privileged intents required!');
+  } else if (error.message.includes('token')) {
+    console.error('\n🔑 TOKEN ERROR:');
+    console.error('Check that DISCORD_TOKEN environment variable is set correctly');
+  }
+  
   process.exit(1);
 });
 
