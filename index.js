@@ -379,21 +379,85 @@ async function monitorCRAWJUTransactions() {
         if (txAnalysis.amount > 0 && txAnalysis.type === 'buy') {
           console.log(`${dexCheck.dexName} DEX ${txAnalysis.type} detected: ${txAnalysis.amount} $CRAWJU in transaction ${tx.tx_hash}`);
           
-          // Calculate ADA amount - find the ADA going to the Splash DEX address
+          // Calculate ADA amount - find the buyer's payment
           let adaAmount = '0';
           
-          // Look for outputs going to the Splash DEX address
-          for (const output of txUtxos.outputs) {
-            if (output.address === config.cardano.dexAddresses.splash) {
-              // Find the ADA amount in this output
-              for (const asset of output.amount) {
+          console.log(`Transaction ${tx.tx_hash} - Finding buyer's ADA payment:`);
+          
+          // Simple approach: Find the largest single ADA input that doesn't come from the DEX
+          // This is almost always the buyer's payment in a DEX transaction
+          let largestNonDexInput = 0;
+          let largestInputAddress = '';
+          
+          for (const input of txUtxos.inputs) {
+            if (input.address !== config.cardano.dexAddresses.splash) {
+              let inputAda = 0;
+              let hasCrawju = false;
+              
+              for (const asset of input.amount) {
                 if (asset.unit === 'lovelace') {
-                  adaAmount = asset.quantity;
+                  inputAda = parseInt(asset.quantity);
+                }
+                if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
+                  hasCrawju = true;
+                }
+              }
+              
+              // Only consider inputs that don't have CRAWJU (fresh buyer payments)
+              if (!hasCrawju && inputAda > largestNonDexInput) {
+                largestNonDexInput = inputAda;
+                largestInputAddress = input.address;
+              }
+            }
+          }
+          
+          console.log(`Largest non-DEX ADA input: ${formatADA(largestNonDexInput.toString())} ₳ from ${largestInputAddress}`);
+          
+          // Now find any change that goes back to the buyer (who receives CRAWJU tokens)
+          let buyerReceivingAddress = null;
+          for (const output of txUtxos.outputs) {
+            if (output.address !== config.cardano.dexAddresses.splash) {
+              for (const asset of output.amount) {
+                if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
+                  buyerReceivingAddress = output.address;
                   break;
                 }
               }
-              break; // Found the DEX output, no need to continue
+              if (buyerReceivingAddress) break;
             }
+          }
+          
+          console.log(`Buyer receiving address: ${buyerReceivingAddress}`);
+          
+          // Find ADA change going to the buyer's receiving address
+          let buyerChangeAda = 0;
+          if (buyerReceivingAddress) {
+            for (const output of txUtxos.outputs) {
+              if (output.address === buyerReceivingAddress) {
+                for (const asset of output.amount) {
+                  if (asset.unit === 'lovelace') {
+                    buyerChangeAda = parseInt(asset.quantity);
+                    break;
+                  }
+                }
+                break;
+              }
+            }
+          }
+          
+          console.log(`Buyer change: ${formatADA(buyerChangeAda.toString())} ₳`);
+          
+          // Net ADA spent = Largest input - Change back to buyer
+          const netAdaSpent = largestNonDexInput - buyerChangeAda;
+          
+          console.log(`Final calculation: ${formatADA(largestNonDexInput.toString())} ₳ - ${formatADA(buyerChangeAda.toString())} ₳ = ${formatADA(netAdaSpent.toString())} ₳`);
+          
+          if (netAdaSpent > 0) {
+            adaAmount = netAdaSpent.toString();
+          } else {
+            // Fallback: use the largest input
+            adaAmount = largestNonDexInput.toString();
+            console.log(`Using largest input as fallback: ${formatADA(adaAmount)} ₳`);
           }
           
           // Create and send notification
