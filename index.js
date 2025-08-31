@@ -165,48 +165,95 @@ function isDexTransaction(metadata) {
   return { isDex: false, dexName: '' };
 }
 
-// Get token amount from transaction - only count tokens going to buyers (not change/existing holdings)
-function getTokenAmount(utxos, policyId) {
-  // Find outputs that have both ADA and CRAWJU tokens (these are likely buy transactions)
-  // We want the smallest CRAWJU amount as that's likely the purchase, not the change
-  let tokenAmounts = [];
+// Analyze transaction to determine if it's a buy or sell and get amounts
+function analyzeTransaction(utxos, policyId) {
+  // Count CRAWJU tokens in inputs vs outputs to determine buy/sell
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let dexOutputTokens = 0; // Tokens going to DEX addresses
+  let userOutputTokens = 0; // Tokens going to user addresses
   
-  for (const output of utxos.outputs) {
-    if (output.amount) {
-      let hasADA = false;
-      let crawjuAmount = 0;
-      
-      for (const asset of output.amount) {
-        if (asset.unit === 'lovelace') {
-          hasADA = true;
-        }
-        if (asset.unit && asset.unit.includes(policyId)) {
-          crawjuAmount = parseInt(asset.quantity);
-        }
-      }
-      
-      // If this output has both ADA and CRAWJU, it's likely a buy transaction
-      if (hasADA && crawjuAmount > 0) {
-        tokenAmounts.push(crawjuAmount);
+  // Calculate input tokens
+  for (const input of utxos.inputs) {
+    for (const asset of input.amount) {
+      if (asset.unit && asset.unit.includes(policyId)) {
+        inputTokens += parseInt(asset.quantity);
       }
     }
   }
   
-  // Return the smallest amount (the actual purchase, not the change)
-  return tokenAmounts.length > 0 ? Math.min(...tokenAmounts) : 0;
+  // Calculate output tokens and categorize by recipient
+  for (const output of utxos.outputs) {
+    let crawjuAmount = 0;
+    
+    for (const asset of output.amount) {
+      if (asset.unit && asset.unit.includes(policyId)) {
+        crawjuAmount = parseInt(asset.quantity);
+        outputTokens += crawjuAmount;
+      }
+    }
+    
+    // Check if this output goes to a known DEX address
+    if (crawjuAmount > 0) {
+      const isDexOutput = output.address === config.cardano.dexAddresses.splash;
+      
+      if (isDexOutput) {
+        dexOutputTokens += crawjuAmount;
+      } else {
+        userOutputTokens += crawjuAmount;
+      }
+    }
+  }
+  
+  // Determine transaction type based on token flow
+  let transactionType = 'unknown';
+  let tokenAmount = 0;
+  
+  if (inputTokens === 0 && outputTokens > 0) {
+    // No tokens in inputs, tokens in outputs = BUY
+    transactionType = 'buy';
+    tokenAmount = userOutputTokens; // Tokens received by user
+  } else if (inputTokens > 0 && dexOutputTokens > 0) {
+    // Tokens in inputs, tokens going to DEX = SELL
+    transactionType = 'sell';
+    tokenAmount = dexOutputTokens; // Tokens sent to DEX
+  } else if (inputTokens > outputTokens) {
+    // More tokens in inputs than outputs = likely SELL
+    transactionType = 'sell';
+    tokenAmount = inputTokens - outputTokens;
+  } else if (outputTokens > inputTokens) {
+    // More tokens in outputs than inputs = likely BUY
+    transactionType = 'buy';
+    tokenAmount = outputTokens - inputTokens;
+  }
+  
+  return {
+    type: transactionType,
+    amount: tokenAmount,
+    inputTokens,
+    outputTokens,
+    dexOutputTokens,
+    userOutputTokens
+  };
 }
 
-// Create buy notification embed
-async function createBuyNotification(transaction, tokenAmount, adaAmount, dexName = 'DEX') {
+// Create transaction notification embed
+async function createTransactionNotification(transaction, tokenAmount, adaAmount, transactionType, dexName = 'DEX') {
   // Calculate market cap in ADA
   const adaAmountNum = parseInt(adaAmount) / 1000000; // Convert lovelaces to ADA
   const pricePerToken = adaAmountNum / tokenAmount;
   const marketCapADA = pricePerToken * 1000000000; // Multiply by 1 billion
   
+  const isBuy = transactionType === 'buy';
+  const color = isBuy ? '#00ff00' : '#ff0000'; // Green for buy, red for sell
+  const emoji = isBuy ? '🦞' : '💸';
+  const action = isBuy ? 'BUY' : 'SELL';
+  const description = isBuy ? `New $CRAWJU purchase on ${dexName}!` : `$CRAWJU sold on ${dexName}!`;
+  
   const embed = new EmbedBuilder()
-    .setColor('#00ff00')
-    .setTitle('🦞 $CRAWJU BUY DETECTED!')
-    .setDescription(`New $CRAWJU purchase on ${dexName}!`)
+    .setColor(color)
+    .setTitle(`${emoji} $CRAWJU ${action} DETECTED!`)
+    .setDescription(description)
     .addFields(
       { name: '💰 Amount', value: `${formatNumber(tokenAmount)} $CRAWJU`, inline: true },
       { name: '💎 Value', value: `${formatADA(adaAmount)} ADA`, inline: true },
@@ -263,11 +310,11 @@ async function monitorCRAWJUTransactions() {
           continue;
         }
         
-        // Check if this is a buy transaction (has CRAWJU in outputs)
-        const tokenAmount = getTokenAmount(txUtxos, config.cardano.policyId);
+        // Analyze transaction to determine if it's a buy or sell
+        const txAnalysis = analyzeTransaction(txUtxos, config.cardano.policyId);
         
-        if (tokenAmount > 0) {
-          console.log(`${dexCheck.dexName} DEX buy detected: ${tokenAmount} $CRAWJU in transaction ${tx.tx_hash}`);
+        if (txAnalysis.amount > 0 && (txAnalysis.type === 'buy' || txAnalysis.type === 'sell')) {
+          console.log(`${dexCheck.dexName} DEX ${txAnalysis.type} detected: ${txAnalysis.amount} $CRAWJU in transaction ${tx.tx_hash}`);
           
           // Calculate ADA amount involved - find pure ADA inputs (buyer's payment)
           let buyerInputs = [];
@@ -354,7 +401,7 @@ async function monitorCRAWJUTransactions() {
           }
           
           // Create and send notification
-          const notification = await createBuyNotification(txDetails, tokenAmount, adaAmount, dexCheck.dexName);
+          const notification = await createTransactionNotification(txDetails, txAnalysis.amount, adaAmount, txAnalysis.type, dexCheck.dexName);
           
           const channel = client.channels.cache.get(config.discord.channelId);
           if (channel) {
@@ -373,9 +420,9 @@ async function monitorCRAWJUTransactions() {
 
             try {
               await channel.send(notification);
-              console.log('✅ Buy notification sent to Discord');
+              console.log(`✅ ${txAnalysis.type.toUpperCase()} notification sent to Discord`);
             } catch (error) {
-              console.error('❌ Failed to send buy notification:', error.message);
+              console.error(`❌ Failed to send ${txAnalysis.type} notification:`, error.message);
               if (error.code === 50001) {
                 console.error('Missing Access - The bot token may be invalid or the bot was removed from the server');
               } else if (error.code === 50013) {
