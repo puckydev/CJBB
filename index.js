@@ -198,13 +198,19 @@ function getTokenAmount(utxos, policyId) {
 
 // Create buy notification embed
 async function createBuyNotification(transaction, tokenAmount, adaAmount, dexName = 'DEX') {
+  // Calculate market cap in ADA
+  const adaAmountNum = parseInt(adaAmount) / 1000000; // Convert lovelaces to ADA
+  const pricePerToken = adaAmountNum / tokenAmount;
+  const marketCapADA = pricePerToken * 1000000000; // Multiply by 1 billion
+  
   const embed = new EmbedBuilder()
     .setColor('#00ff00')
     .setTitle('🦞 $CRAWJU BUY DETECTED!')
-    .setDescription(`A new purchase of $CRAWJU has been detected on ${dexName}!`)
+    .setDescription(`New $CRAWJU purchase on ${dexName}!`)
     .addFields(
       { name: '💰 Amount', value: `${formatNumber(tokenAmount)} $CRAWJU`, inline: true },
       { name: '💎 Value', value: `${formatADA(adaAmount)} ADA`, inline: true },
+      { name: '📈 Market Cap', value: `${formatNumber(Math.round(marketCapADA))} ADA`, inline: true },
       { name: '📊 Transaction', value: `[View on Cardanoscan](https://cardanoscan.io/transaction/${transaction.hash})`, inline: false }
     )
     .setTimestamp(new Date(transaction.block_time * 1000))
@@ -285,17 +291,38 @@ async function monitorCRAWJUTransactions() {
             }
           }
           
-          // Calculate the net purchase amount (subtract transaction fee)
+          // Calculate the actual ADA amount spent on the purchase
+          // For DEX transactions, find the ADA output that goes to the liquidity pool
           let adaAmount = '0';
-          if (buyerInputs.length > 0) {
-            // Get the largest pure ADA input (buyer's main payment)
-            const grossAmount = Math.max(...buyerInputs);
-            // Subtract the transaction fee to get the net purchase amount
-            const transactionFee = parseInt(txDetails.fees);
-            const netAmount = grossAmount - transactionFee;
-            adaAmount = netAmount.toString();
-          } else {
-            // Fallback: Calculate difference between inputs and outputs
+          
+          // Method 1: Look for ADA outputs that correspond to the token purchase
+          // Find outputs where someone receives both ADA change and CRAWJU tokens
+          let purchaseOutputs = [];
+          
+          for (const output of txUtxos.outputs) {
+            let hasADA = false;
+            let hasCRAWJU = false;
+            let outputADA = 0;
+            
+            for (const asset of output.amount) {
+              if (asset.unit === 'lovelace') {
+                hasADA = true;
+                outputADA = parseInt(asset.quantity);
+              }
+              if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
+                hasCRAWJU = true;
+              }
+            }
+            
+            // If output has both ADA and CRAWJU, it's likely the buyer receiving their purchase
+            if (hasADA && hasCRAWJU) {
+              purchaseOutputs.push({ ada: outputADA, tokens: true });
+            }
+          }
+          
+          if (purchaseOutputs.length > 0) {
+            // For DEX swaps, calculate based on input vs output difference
+            // This gives us the actual ADA spent (including fees)
             let totalInputADA = 0;
             let totalOutputADA = 0;
             
@@ -315,8 +342,15 @@ async function monitorCRAWJUTransactions() {
               }
             }
             
-            const netSpent = totalInputADA - totalOutputADA;
-            adaAmount = netSpent.toString();
+            // The difference is the actual amount spent (including fees)
+            const actualSpent = totalInputADA - totalOutputADA;
+            adaAmount = actualSpent.toString();
+          } else {
+            // Fallback method
+            if (buyerInputs.length > 0) {
+              const grossAmount = Math.max(...buyerInputs);
+              adaAmount = grossAmount.toString();
+            }
           }
           
           // Create and send notification
