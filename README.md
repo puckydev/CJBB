@@ -7,7 +7,7 @@ A Discord bot that monitors the Cardano blockchain for $CRAWJU token purchases a
 - 🔍 **Real-time Monitoring**: Continuously monitors the Cardano blockchain for $CRAWJU token transactions
 - 🚀 **Instant Notifications**: Sends beautiful Discord embeds when buy transactions are detected
 - 👑 **Custom Branding**: Includes the king.JPG image in notifications
-- 📊 **Transaction Details**: Shows token amount, ADA value, and links to blockchain explorer
+- 📊 **Transaction Details**: Shows token amount, ₳ value, and links to blockchain explorer
 - 🛡️ **Error Handling**: Robust error handling with retries and logging
 - ⚡ **Production Ready**: Configured for deployment on Railway
 

@@ -239,16 +239,11 @@ function analyzeTransaction(utxos, policyId) {
 
 // Create transaction notification embed
 async function createTransactionNotification(transaction, tokenAmount, adaAmount, transactionType, dexName = 'DEX') {
-  // Calculate market cap in ADA
-  const adaAmountNum = parseInt(adaAmount) / 1000000; // Convert lovelaces to ADA
-  const pricePerToken = adaAmountNum / tokenAmount;
-  const marketCapADA = pricePerToken * 1000000000; // Multiply by 1 billion
-  
   const isBuy = transactionType === 'buy';
   const color = isBuy ? '#00ff00' : '#ff0000'; // Green for buy, red for sell
   const emoji = isBuy ? '🦞' : '💸';
   const action = isBuy ? 'BUY' : 'SELL';
-  const description = isBuy ? `New $CRAWJU purchase on ${dexName}!` : `$CRAWJU sold on ${dexName}!`;
+  const description = isBuy ? `$CRAWJU purchased on ${dexName}!` : `$CRAWJU sold on ${dexName}!`;
   
   const embed = new EmbedBuilder()
     .setColor(color)
@@ -256,8 +251,7 @@ async function createTransactionNotification(transaction, tokenAmount, adaAmount
     .setDescription(description)
     .addFields(
       { name: '💰 Amount', value: `${formatNumber(tokenAmount)} $CRAWJU`, inline: true },
-      { name: '💎 Value', value: `${formatADA(adaAmount)} ADA`, inline: true },
-      { name: '📈 Market Cap', value: `${formatNumber(Math.round(marketCapADA))} ADA`, inline: true },
+      { name: '💎 Value', value: `${formatADA(adaAmount)} ₳`, inline: true },
       { name: '📊 Transaction', value: `[View on Cardanoscan](https://cardanoscan.io/transaction/${transaction.hash})`, inline: false }
     )
     .setTimestamp(new Date(transaction.block_time * 1000))

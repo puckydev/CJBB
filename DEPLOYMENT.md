@@ -77,7 +77,7 @@ The bot will:
 3. Detect $CRAWJU buy transactions
 4. Send notifications with:
    - Token amount purchased
-   - ADA value
+   - ₳ value
    - Transaction link to Cardanoscan
    - King.JPG thumbnail image
 
