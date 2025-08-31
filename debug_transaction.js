@@ -332,9 +332,43 @@ async function debugTransaction(txHash) {
     console.log('- User Input Tokens:', txAnalysis.userInputTokens.toLocaleString());
     console.log('- User Output Tokens:', txAnalysis.userOutputTokens.toLocaleString());
     
+    // Test the improved ADA calculation logic from index.js
+    console.log('\n💰 Improved ADA Calculation:');
+    let improvedAdaAmount = '0';
+    let buyerAdaInputs = [];
+    
+    for (const input of txUtxos.inputs) {
+      let hasTokens = false;
+      let inputAda = 0;
+      
+      for (const asset of input.amount) {
+        if (asset.unit === 'lovelace') {
+          inputAda = parseInt(asset.quantity);
+        }
+        if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
+          hasTokens = true;
+        }
+      }
+      
+      // If this input only has ADA (no CRAWJU tokens), it's from the buyer
+      if (!hasTokens && inputAda > 0) {
+        buyerAdaInputs.push(inputAda);
+      }
+    }
+    
+    if (buyerAdaInputs.length > 0) {
+      improvedAdaAmount = Math.max(...buyerAdaInputs).toString();
+      console.log(`- Buyer ADA inputs found: ${buyerAdaInputs.map(a => (a/1000000).toFixed(6)).join(', ')} ₳`);
+      console.log(`- Largest buyer input (purchase amount): ${(parseInt(improvedAdaAmount)/1000000).toFixed(2)} ₳`);
+    } else {
+      improvedAdaAmount = (totalInputADA - totalOutputADA).toString();
+      console.log(`- No pure ADA inputs found, using fallback: ${(parseInt(improvedAdaAmount)/1000000).toFixed(6)} ₳`);
+    }
+    
     console.log('\n🎯 Conclusion:');
     if (dexCheck.isDex && txAnalysis.type === 'buy') {
       console.log('✅ This transaction WOULD trigger a BUY notification');
+      console.log(`📊 Notification would show: ${txAnalysis.amount.toLocaleString()} $CRAWJU for ${(parseInt(improvedAdaAmount)/1000000).toFixed(2)} ₳`);
     } else if (dexCheck.isDex && txAnalysis.type === 'sell') {
       console.log('❌ This transaction WOULD NOT trigger a notification (SELL detected)');
     } else if (!dexCheck.isDex) {

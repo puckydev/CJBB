@@ -300,7 +300,7 @@ async function createTransactionNotification(transaction, tokenAmount, adaAmount
   const color = isBuy ? '#00ff00' : '#ff0000'; // Green for buy, red for sell
   const emoji = isBuy ? '🦞' : '💸';
   const action = isBuy ? 'BUY' : 'SELL';
-  const description = isBuy ? `$CRAWJU purchased on ${dexName}!` : `$CRAWJU sold on ${dexName}!`;
+  const description = isBuy ? `$CRAWJU ${action} detected!` : `$CRAWJU sold on ${dexName}!`;
   
   const embed = new EmbedBuilder()
     .setColor(color)
@@ -380,60 +380,37 @@ async function monitorCRAWJUTransactions() {
         if (txAnalysis.amount > 0 && txAnalysis.type === 'buy') {
           console.log(`${dexCheck.dexName} DEX ${txAnalysis.type} detected: ${txAnalysis.amount} $CRAWJU in transaction ${tx.tx_hash}`);
           
-          // Calculate ADA amount involved - find pure ADA inputs (buyer's payment)
-          let buyerInputs = [];
+          // Calculate ADA amount involved - find the actual ADA spent by the buyer
+          // Look for inputs that don't contain CRAWJU tokens (buyer's payment)
+          let adaAmount = '0';
+          
+          // Find buyer's ADA inputs (inputs without CRAWJU tokens)
+          let buyerAdaInputs = [];
           
           for (const input of txUtxos.inputs) {
             let hasTokens = false;
-            let adaAmount = 0;
+            let inputAda = 0;
             
             for (const asset of input.amount) {
               if (asset.unit === 'lovelace') {
-                adaAmount = parseInt(asset.quantity);
+                inputAda = parseInt(asset.quantity);
               }
               if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
                 hasTokens = true;
               }
             }
             
-            // If this input only has ADA (no CRAWJU tokens), it's likely from the buyer
-            if (!hasTokens && adaAmount > 0) {
-              buyerInputs.push(adaAmount);
+            // If this input only has ADA (no CRAWJU tokens), it's from the buyer
+            if (!hasTokens && inputAda > 0) {
+              buyerAdaInputs.push(inputAda);
             }
           }
           
-          // Calculate the actual ADA amount spent on the purchase
-          // For DEX transactions, find the ADA output that goes to the liquidity pool
-          let adaAmount = '0';
-          
-          // Method 1: Look for ADA outputs that correspond to the token purchase
-          // Find outputs where someone receives both ADA change and CRAWJU tokens
-          let purchaseOutputs = [];
-          
-          for (const output of txUtxos.outputs) {
-            let hasADA = false;
-            let hasCRAWJU = false;
-            let outputADA = 0;
-            
-            for (const asset of output.amount) {
-              if (asset.unit === 'lovelace') {
-                hasADA = true;
-                outputADA = parseInt(asset.quantity);
-              }
-              if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
-                hasCRAWJU = true;
-              }
-            }
-            
-            // If output has both ADA and CRAWJU, it's likely the buyer receiving their purchase
-            if (hasADA && hasCRAWJU) {
-              purchaseOutputs.push({ ada: outputADA, tokens: true });
-            }
-          }
-          
-          if (purchaseOutputs.length > 0) {
-            // For DEX swaps, calculate based on input vs output difference
-            // This gives us the actual ADA spent (including fees)
+          // The buyer's payment is typically the largest ADA-only input
+          if (buyerAdaInputs.length > 0) {
+            adaAmount = Math.max(...buyerAdaInputs).toString();
+          } else {
+            // Fallback: calculate net ADA difference (less accurate but better than nothing)
             let totalInputADA = 0;
             let totalOutputADA = 0;
             
@@ -453,15 +430,7 @@ async function monitorCRAWJUTransactions() {
               }
             }
             
-            // The difference is the actual amount spent (including fees)
-            const actualSpent = totalInputADA - totalOutputADA;
-            adaAmount = actualSpent.toString();
-          } else {
-            // Fallback method
-            if (buyerInputs.length > 0) {
-              const grossAmount = Math.max(...buyerInputs);
-              adaAmount = grossAmount.toString();
-            }
+            adaAmount = (totalInputADA - totalOutputADA).toString();
           }
           
           // Create and send notification
