@@ -102,7 +102,8 @@ const blockfrost = new BlockfrostAPI(config.cardano.blockfrostApiKey, config.car
 
 // Format ADA amount
 function formatADA(lovelaces) {
-  return (parseInt(lovelaces) / 1000000).toFixed(2);
+  const adaAmount = parseInt(lovelaces) / 1000000;
+  return adaAmount.toFixed(2);
 }
 
 // Format large numbers with commas
@@ -300,12 +301,10 @@ async function createTransactionNotification(transaction, tokenAmount, adaAmount
   const color = isBuy ? '#00ff00' : '#ff0000'; // Green for buy, red for sell
   const emoji = isBuy ? '🦞' : '💸';
   const action = isBuy ? 'BUY' : 'SELL';
-  const description = isBuy ? `$CRAWJU ${action} detected!` : `$CRAWJU sold on ${dexName}!`;
   
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(`${emoji} $CRAWJU ${action} DETECTED!`)
-    .setDescription(description)
     .addFields(
       { name: '💰 Amount', value: `${formatNumber(tokenAmount)} $CRAWJU`, inline: true },
       { name: '💎 Value', value: `${formatADA(adaAmount)} ₳`, inline: true },
@@ -380,57 +379,21 @@ async function monitorCRAWJUTransactions() {
         if (txAnalysis.amount > 0 && txAnalysis.type === 'buy') {
           console.log(`${dexCheck.dexName} DEX ${txAnalysis.type} detected: ${txAnalysis.amount} $CRAWJU in transaction ${tx.tx_hash}`);
           
-          // Calculate ADA amount involved - find the actual ADA spent by the buyer
-          // Look for inputs that don't contain CRAWJU tokens (buyer's payment)
+          // Calculate ADA amount - find the ADA going to the Splash DEX address
           let adaAmount = '0';
           
-          // Find buyer's ADA inputs (inputs without CRAWJU tokens)
-          let buyerAdaInputs = [];
-          
-          for (const input of txUtxos.inputs) {
-            let hasTokens = false;
-            let inputAda = 0;
-            
-            for (const asset of input.amount) {
-              if (asset.unit === 'lovelace') {
-                inputAda = parseInt(asset.quantity);
-              }
-              if (asset.unit && asset.unit.includes(config.cardano.policyId)) {
-                hasTokens = true;
-              }
-            }
-            
-            // If this input only has ADA (no CRAWJU tokens), it's from the buyer
-            if (!hasTokens && inputAda > 0) {
-              buyerAdaInputs.push(inputAda);
-            }
-          }
-          
-          // The buyer's payment is typically the largest ADA-only input
-          if (buyerAdaInputs.length > 0) {
-            adaAmount = Math.max(...buyerAdaInputs).toString();
-          } else {
-            // Fallback: calculate net ADA difference (less accurate but better than nothing)
-            let totalInputADA = 0;
-            let totalOutputADA = 0;
-            
-            for (const input of txUtxos.inputs) {
-              for (const asset of input.amount) {
-                if (asset.unit === 'lovelace') {
-                  totalInputADA += parseInt(asset.quantity);
-                }
-              }
-            }
-            
-            for (const output of txUtxos.outputs) {
+          // Look for outputs going to the Splash DEX address
+          for (const output of txUtxos.outputs) {
+            if (output.address === config.cardano.dexAddresses.splash) {
+              // Find the ADA amount in this output
               for (const asset of output.amount) {
                 if (asset.unit === 'lovelace') {
-                  totalOutputADA += parseInt(asset.quantity);
+                  adaAmount = asset.quantity;
+                  break;
                 }
               }
+              break; // Found the DEX output, no need to continue
             }
-            
-            adaAmount = (totalInputADA - totalOutputADA).toString();
           }
           
           // Create and send notification
