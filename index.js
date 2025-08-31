@@ -110,55 +110,68 @@ function formatNumber(num) {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-// Check if transaction is a DEX transaction based on metadata
-function isDexTransaction(metadata) {
-  if (!metadata || metadata.length === 0) {
-    return { isDex: false, dexName: '' };
-  }
-
-  for (const meta of metadata) {
-    // Check for standard DEX metadata (label 674)
-    if (meta.label === '674') {
-      const message = meta.json_metadata;
-      const messageStr = JSON.stringify(message).toLowerCase();
-      
-      if (messageStr.includes('splash')) {
-        return { isDex: true, dexName: 'Splash' };
+// Check if transaction is a DEX transaction based on metadata and addresses
+function isDexTransaction(metadata, utxos = null) {
+  // First check metadata
+  if (metadata && metadata.length > 0) {
+    for (const meta of metadata) {
+      // Check for standard DEX metadata (label 674)
+      if (meta.label === '674') {
+        const message = meta.json_metadata;
+        const messageStr = JSON.stringify(message).toLowerCase();
+        
+        if (messageStr.includes('splash')) {
+          return { isDex: true, dexName: 'Splash' };
+        }
+        
+        // Check for other DEX patterns
+        const dexPatterns = [
+          { name: 'Minswap', patterns: ['minswap', 'order executed'] },
+          { name: 'SundaeSwap', patterns: ['sundae', 'swap'] },
+          { name: 'MuesliSwap', patterns: ['muesli', 'order'] },
+          { name: 'WingRiders', patterns: ['wing', 'riders'] }
+        ];
+        
+        for (const dex of dexPatterns) {
+          if (dex.patterns.some(pattern => messageStr.includes(pattern))) {
+            return { isDex: true, dexName: dex.name };
+          }
+        }
       }
       
-      // Check for other DEX patterns
-      const dexPatterns = [
-        { name: 'Minswap', patterns: ['minswap', 'order executed'] },
-        { name: 'SundaeSwap', patterns: ['sundae', 'swap'] },
-        { name: 'MuesliSwap', patterns: ['muesli', 'order'] },
-        { name: 'WingRiders', patterns: ['wing', 'riders'] }
-      ];
+      // Check for Splash DEX specific metadata (label 0 with 0x0100)
+      else if (meta.label === '0' || meta.label === 0) {
+        const message = meta.json_metadata;
+        
+        // Splash DEX uses label 0 with specific hex values
+        if (message === '0x0100' || message === '0x0001' || (typeof message === 'string' && message.startsWith('0x01'))) {
+          return { isDex: true, dexName: 'Splash' };
+        }
+      }
       
-      for (const dex of dexPatterns) {
-        if (dex.patterns.some(pattern => messageStr.includes(pattern))) {
-          return { isDex: true, dexName: dex.name };
+      // Check for other metadata that might indicate DEX activity
+      else if (meta.label) {
+        const message = meta.json_metadata;
+        const messageStr = JSON.stringify(message).toLowerCase();
+        
+        if (messageStr.includes('splash') || messageStr.includes('dex') || messageStr.includes('swap')) {
+          return { isDex: true, dexName: messageStr.includes('splash') ? 'Splash' : 'Unknown DEX' };
         }
       }
     }
+  }
+  
+  // If no metadata found or no DEX detected, check addresses in UTXOs
+  if (utxos) {
+    // Check if any input or output involves known DEX addresses
+    const allAddresses = [
+      ...utxos.inputs.map(input => input.address),
+      ...utxos.outputs.map(output => output.address)
+    ];
     
-    // Check for Splash DEX specific metadata (label 0 with 0x0100)
-    else if (meta.label === '0' || meta.label === 0) {
-      const message = meta.json_metadata;
-      
-      // Splash DEX uses label 0 with specific hex values
-      if (message === '0x0100' || message === '0x0001' || (typeof message === 'string' && message.startsWith('0x01'))) {
-        return { isDex: true, dexName: 'Splash' };
-      }
-    }
-    
-    // Check for other metadata that might indicate DEX activity
-    else if (meta.label) {
-      const message = meta.json_metadata;
-      const messageStr = JSON.stringify(message).toLowerCase();
-      
-      if (messageStr.includes('splash') || messageStr.includes('dex') || messageStr.includes('swap')) {
-        return { isDex: true, dexName: messageStr.includes('splash') ? 'Splash' : 'Unknown DEX' };
-      }
+    // Check for Splash DEX address
+    if (allAddresses.includes(config.cardano.dexAddresses.splash)) {
+      return { isDex: true, dexName: 'Splash' };
     }
   }
   
@@ -170,14 +183,30 @@ function analyzeTransaction(utxos, policyId) {
   // Count CRAWJU tokens in inputs vs outputs to determine buy/sell
   let inputTokens = 0;
   let outputTokens = 0;
+  let dexInputTokens = 0; // Tokens coming from DEX addresses
   let dexOutputTokens = 0; // Tokens going to DEX addresses
+  let userInputTokens = 0; // Tokens coming from user addresses
   let userOutputTokens = 0; // Tokens going to user addresses
   
-  // Calculate input tokens
+  // Calculate input tokens and categorize by source
   for (const input of utxos.inputs) {
+    let crawjuAmount = 0;
+    
     for (const asset of input.amount) {
       if (asset.unit && asset.unit.includes(policyId)) {
-        inputTokens += parseInt(asset.quantity);
+        crawjuAmount = parseInt(asset.quantity);
+        inputTokens += crawjuAmount;
+      }
+    }
+    
+    // Check if this input comes from a known DEX address
+    if (crawjuAmount > 0) {
+      const isDexInput = input.address === config.cardano.dexAddresses.splash;
+      
+      if (isDexInput) {
+        dexInputTokens += crawjuAmount;
+      } else {
+        userInputTokens += crawjuAmount;
       }
     }
   }
@@ -205,26 +234,52 @@ function analyzeTransaction(utxos, policyId) {
     }
   }
   
-  // Determine transaction type based on token flow
+  // Determine transaction type based on token flow with improved logic
   let transactionType = 'unknown';
   let tokenAmount = 0;
   
-  if (inputTokens === 0 && outputTokens > 0) {
-    // No tokens in inputs, tokens in outputs = BUY
+  // NEW LOGIC: Focus on user perspective and DEX interaction
+  // If tokens flow FROM DEX TO USER = BUY
+  // If tokens flow FROM USER TO DEX = SELL
+  
+  if (dexInputTokens > 0 && userOutputTokens > 0) {
+    // Tokens coming from DEX and going to user = BUY
     transactionType = 'buy';
-    tokenAmount = userOutputTokens; // Tokens received by user
-  } else if (inputTokens > 0 && dexOutputTokens > 0) {
-    // Tokens in inputs, tokens going to DEX = SELL
+    tokenAmount = userOutputTokens;
+  } else if (userInputTokens > 0 && dexOutputTokens > 0) {
+    // Tokens coming from user and going to DEX = SELL
     transactionType = 'sell';
-    tokenAmount = dexOutputTokens; // Tokens sent to DEX
-  } else if (inputTokens > outputTokens) {
-    // More tokens in inputs than outputs = likely SELL
-    transactionType = 'sell';
-    tokenAmount = inputTokens - outputTokens;
-  } else if (outputTokens > inputTokens) {
-    // More tokens in outputs than inputs = likely BUY
+    tokenAmount = userInputTokens;
+  } else if (inputTokens === 0 && userOutputTokens > 0) {
+    // No tokens in inputs, user receives tokens = BUY (token minting/initial distribution)
     transactionType = 'buy';
-    tokenAmount = outputTokens - inputTokens;
+    tokenAmount = userOutputTokens;
+  } else if (userInputTokens > 0 && userOutputTokens === 0) {
+    // User has tokens in inputs, no tokens to user = SELL (complete sale)
+    transactionType = 'sell';
+    tokenAmount = userInputTokens;
+  } else if (userInputTokens > 0 && userOutputTokens > 0) {
+    // Tokens in inputs and user receives tokens = could be a swap/buy with change
+    if (userOutputTokens > userInputTokens) {
+      // User receives more tokens than they put in = BUY
+      transactionType = 'buy';
+      tokenAmount = userOutputTokens - userInputTokens;
+    } else if (userInputTokens > userOutputTokens) {
+      // User puts in more tokens than they receive = SELL (with change)
+      transactionType = 'sell';
+      tokenAmount = userInputTokens - userOutputTokens;
+    }
+  } else {
+    // Fallback logic
+    if (outputTokens > inputTokens) {
+      // More tokens in outputs than inputs = likely BUY
+      transactionType = 'buy';
+      tokenAmount = outputTokens - inputTokens;
+    } else if (inputTokens > outputTokens) {
+      // More tokens in inputs than outputs = likely SELL
+      transactionType = 'sell';
+      tokenAmount = inputTokens - outputTokens;
+    }
   }
   
   return {
@@ -232,7 +287,9 @@ function analyzeTransaction(utxos, policyId) {
     amount: tokenAmount,
     inputTokens,
     outputTokens,
+    dexInputTokens,
     dexOutputTokens,
+    userInputTokens,
     userOutputTokens
   };
 }
@@ -255,7 +312,7 @@ async function createTransactionNotification(transaction, tokenAmount, adaAmount
       { name: '📊 Transaction', value: `[View on Cardanoscan](https://cardanoscan.io/transaction/${transaction.hash})`, inline: false }
     )
     .setTimestamp(new Date(transaction.block_time * 1000))
-    .setFooter({ text: 'Powered by King Craju' });
+    .setFooter({ text: 'Powered by King Crawju' });
 
   // Add king image if it exists
   const kingImagePath = path.join(__dirname, 'king.JPG');
@@ -297,7 +354,7 @@ async function monitorCRAWJUTransactions() {
         ]);
 
         // First check if this is a DEX transaction
-        const dexCheck = isDexTransaction(txMetadata);
+        const dexCheck = isDexTransaction(txMetadata, txUtxos);
         
         if (!dexCheck.isDex) {
           console.log(`Skipping transaction ${tx.tx_hash} - not a DEX transaction`);
@@ -307,7 +364,20 @@ async function monitorCRAWJUTransactions() {
         // Analyze transaction to determine if it's a buy or sell
         const txAnalysis = analyzeTransaction(txUtxos, config.cardano.policyId);
         
-        if (txAnalysis.amount > 0 && (txAnalysis.type === 'buy' || txAnalysis.type === 'sell')) {
+        // Log transaction analysis for debugging
+        console.log(`Transaction ${tx.tx_hash} analysis:`, {
+          type: txAnalysis.type,
+          amount: txAnalysis.amount,
+          inputTokens: txAnalysis.inputTokens,
+          outputTokens: txAnalysis.outputTokens,
+          dexInputTokens: txAnalysis.dexInputTokens,
+          dexOutputTokens: txAnalysis.dexOutputTokens,
+          userInputTokens: txAnalysis.userInputTokens,
+          userOutputTokens: txAnalysis.userOutputTokens
+        });
+        
+        // Only send notifications for BUY transactions, not sells
+        if (txAnalysis.amount > 0 && txAnalysis.type === 'buy') {
           console.log(`${dexCheck.dexName} DEX ${txAnalysis.type} detected: ${txAnalysis.amount} $CRAWJU in transaction ${tx.tx_hash}`);
           
           // Calculate ADA amount involved - find pure ADA inputs (buyer's payment)
@@ -427,6 +497,10 @@ async function monitorCRAWJUTransactions() {
             console.error(`❌ Discord channel with ID ${config.discord.channelId} not found`);
             console.log('Please verify the channel ID and ensure the bot has access to the server');
           }
+        } else if (txAnalysis.amount > 0 && txAnalysis.type === 'sell') {
+          console.log(`${dexCheck.dexName} DEX SELL detected (notification skipped): ${txAnalysis.amount} $CRAWJU in transaction ${tx.tx_hash}`);
+        } else if (txAnalysis.amount > 0) {
+          console.log(`${dexCheck.dexName} DEX transaction with unknown type detected: ${txAnalysis.type}, amount: ${txAnalysis.amount} $CRAWJU in transaction ${tx.tx_hash}`);
         }
       } catch (error) {
         console.error(`Error processing transaction ${tx.tx_hash}:`, error.message);
@@ -508,7 +582,7 @@ async function sendStartupMessage() {
       const embed = new EmbedBuilder()
         .setColor('#0099ff')
         .setTitle('🤖 CRAWJU Buy Bot Online!')
-        .setDescription('Bot is now monitoring the Cardano blockchain for $CRAWJU purchases.')
+        .setDescription('Bot is now monitoring the Cardano blockchain for $CRAWJU purchases. Only BUY transactions will trigger notifications.')
         .setTimestamp();
       
       await channel.send({ embeds: [embed] });
